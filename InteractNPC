@@ -1,0 +1,137 @@
+local player = game.Players.LocalPlayer
+local char = player.Character
+local mouse = player:GetMouse()
+
+UIS = game:GetService("UserInputService")
+RS = game:GetService("ReplicatedStorage")
+
+local CanActTrueEvent = RS.Events.CanActTrue
+local CanActFalseEvent = RS.Events.CanActFalse
+local ChoiceEvent = RS.Events:FindFirstChild("ChooseChoice")
+
+local messages = {"X"}
+local talkingSpeed = nil
+local talkRange = 15
+local choiceButton = RS:FindFirstChild("Choice")
+
+local currNpc = nil
+local currDialogInfo = nil
+local gui = nil
+
+
+wait(0.5)
+
+
+local function talk(npc, dialogInfo, chatGui, textNumber)
+	local module = require(dialogInfo)
+	local sound = chatGui.TalkSound
+	
+	chatGui.Enabled = true
+	chatGui.Frame.NpcName.TextStrokeColor3 = module.nameColor
+	chatGui.Frame.NpcName.Text = module.Name
+	local currentMessage = module.Dialog[textNumber].Text
+	talkingSpeed = module.talkingSpeed
+
+	local dialog = chatGui.Frame.Dialog
+	chatGui.Frame.Dialog.Text = currentMessage
+	local contentText = dialog.ContentText
+	chatGui.Frame.Dialog.MaxVisibleGraphemes = 0
+	
+	local symbols = {",", "%.", "!", "?", ":", ";"}
+	local detectedSymbol = nil
+	
+	for i = 1, string.len(contentText) do 
+		dialog.MaxVisibleGraphemes = i
+		sound:Play()
+		
+		for _, symbol in pairs(symbols) do
+			if string.sub(contentText, i, i):match(symbol) then
+				detectedSymbol = symbol
+			end
+		end
+		
+		if detectedSymbol == "," then
+			wait((talkingSpeed / 1000) + .1)
+			detectedSymbol = nil
+		elseif detectedSymbol == "%." or detectedSymbol == "!" or detectedSymbol == "?" then
+			wait((talkingSpeed / 1000) + .5)
+			detectedSymbol = nil
+		else
+			wait(talkingSpeed / 1000)
+		end
+	end
+	for i = 1, #module.Dialog[textNumber].Choices do
+		local newChoice = choiceButton:Clone()
+		newChoice.Text.Text = module.Dialog[textNumber].Choices[i].Text
+		newChoice.Parent = chatGui.Frame.Frame
+		newChoice:SetAttribute("Next", module.Dialog[textNumber].Choices[i].Next)
+	end
+end
+
+ChoiceEvent.Event:Connect(function(nextNum)
+	local canAct = player.Character:WaitForChild("CanAct")
+	if nextNum == 0 or nextNum == nil then
+		--UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+		gui.Frame.Dialog.Text = " "
+		gui.Enabled = false
+		local children = gui.Frame.Frame:GetChildren()
+		for i = 1, #children do
+			if children[i].Name == "Choice" then
+				children[i]:Destroy()
+			end
+		end
+		CanActTrueEvent:FireServer(canAct)
+	elseif nextNum == 1 then
+		local shopGui = currNpc:FindFirstChild(currNpc.Name)
+		shopGui.Parent = player.PlayerGui
+		shopGui.Enabled = true
+		gui.Frame.Dialog.Text = " "
+		gui.Enabled = false
+		local children = gui.Frame.Frame:GetChildren()
+		for i = 1, #children do
+			if children[i].Name == "Choice" then
+				children[i]:Destroy()
+			end
+		end
+	else
+		local children = gui.Frame.Frame:GetChildren()
+		for i = 1, #children do
+			if children[i].Name == "Choice" then
+				children[i]:Destroy()
+			end
+		end
+		talk(currNpc, currDialogInfo, gui, nextNum)
+	end
+end)
+
+UIS.InputBegan:Connect(function(input)
+	local canAct = player.Character:WaitForChild("CanAct")
+	if input.KeyCode == Enum.KeyCode.E and mouse.Target:FindFirstAncestorOfClass("Model") and canAct.Value == true and (script.Parent.Parent.Character:FindFirstChild("HumanoidRootPart").Position - mouse.Target.Position).Magnitude <= talkRange then
+		if mouse.Target:FindFirstAncestorOfClass("Model"):GetAttribute("NPC") then
+			CanActFalseEvent:FireServer(canAct)
+			local npc = mouse.Target:FindFirstAncestorOfClass("Model")
+			gui = player.PlayerGui:FindFirstChild("Chat")
+			local modal = gui.Frame.Modal
+			modal.Modal = true
+			
+			local allGui = player.PlayerGui:GetChildren()
+
+			for i = 1, #allGui do
+				if allGui[i].Name ~= "Chat" and allGui[i].Name ~= "Gold" then
+					allGui[i].Enabled = false
+				end
+			end
+
+			local shopGui = nil
+			local dialogInfo = npc:FindFirstChild("Dialog")
+
+
+
+			if gui.Enabled == false then  -- OPEN TO ADD NPCS
+				talk(npc, dialogInfo, gui, 2)
+				currNpc = npc
+				currDialogInfo = dialogInfo
+			end
+		end
+	end
+end)
