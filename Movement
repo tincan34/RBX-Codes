@@ -1,0 +1,386 @@
+--[[ 
+Made by GoatTatum on RBX / Tincan43 on Discord
+Place in StarterPlayer -> StarterCharacterScripts
+Name any part you want climbable "ClimbPart"
+]]
+
+
+------------------Necessities--------------------------------------------------------------------------------------------
+local plr = game:GetService("Players").LocalPlayer
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Events------------------------------------------------------------------------------------------------
+local RS = game:GetService("ReplicatedStorage")
+local eventsFolder = RS:WaitForChild("ControllerEvents")
+
+local changeSpeedEvent = eventsFolder:WaitForChild("ChangeSpeed")
+local createBVEvent = eventsFolder:WaitForChild("CreateBV")
+local hiddenBladeEvent = eventsFolder:WaitForChild("HiddenBlade")
+local createWeldCEvent = eventsFolder:WaitForChild("CreateWeldC")
+local pivotModelEvent = eventsFolder:WaitForChild("PivotModel")
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Keybinds------------------------------------------------------------------------------------------------
+local runKey = Enum.KeyCode.R
+local space = Enum.KeyCode.Space
+local dashKey = Enum.KeyCode.Q
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Other Customizeables-----------------------------------------------------------------------------------------
+local useHiddenBlade = true
+local canBladeWithRun = false
+local canParkourWithoutRun = false
+local autoDetectClimbPartSize = true
+local debugToolsOn = false
+
+local debugLifetime = 1
+local climbHitboxSize = Vector3.new(8,7,4)
+local climbHitboxOffset = CFrame.new(0,1.25,-1)
+local climbHangOffset = CFrame.new(0,-1,1)
+local rayLength = 4
+local ledgeGrabBoost = 45
+local climbJumpBoost = 45
+local vaultSpeedBoost = 20
+local runSpeedBoost = 6
+
+local runCD = .5
+local hbCD = 2
+local dashCD = 1
+local climbCD = .25
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Booleans------------------------------------------------------------------------------------------------
+local climbing = false
+local running = false
+local runDeb = false
+local jumping = false
+local landing = false
+local dashing = false
+local dashDeb = false
+local hbDeb = false
+local climbDeb = false
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Other------------------------------------------------------------------------------------------------
+local HBprompt = script:WaitForChild("HiddenBladePrompt")
+local currClimbAnim = nil
+------------------------------------------------------------------------------------------------------------------------
+
+local char = plr.Character
+local hum = char:WaitForChild("Humanoid")
+
+------------------AnimLoads------------------------------------------------------------------------------------------------
+local vaultTrack = hum.Animator:LoadAnimation(script:WaitForChild("Animations"):WaitForChild("Vault"))
+local hiddenBladeTrack = hum.Animator:LoadAnimation(script:WaitForChild("Animations"):WaitForChild("HiddenBlade"))
+local climbIdleTrack = hum.Animator:LoadAnimation(script:WaitForChild("Animations"):WaitForChild("ClimbIdle"))
+local climbTrackR = hum.Animator:LoadAnimation(script:WaitForChild("Animations"):WaitForChild("ClimbIdleR"))
+local climbTrackL = hum.Animator:LoadAnimation(script:WaitForChild("Animations"):WaitForChild("ClimbIdleL"))
+------------------------------------------------------------------------------------------------------------------------
+
+------------------Sounds------------------------------------------------------------------------------------------------
+local vaultSound = script:WaitForChild("Sounds"):WaitForChild("VaultSound")
+local grabSound = script:WaitForChild("Sounds"):WaitForChild("Grab")
+local bladeSound = script:WaitForChild("Sounds"):WaitForChild("Knife")
+------------------------------------------------------------------------------------------------------------------------
+
+hum.StateChanged:Connect(function(old, new)
+	if new == Enum.HumanoidStateType.Freefall then
+		jumping = true
+	elseif new == Enum.HumanoidStateType.Landed then
+		jumping = false
+	end
+end)
+
+local function VisualizeRay(origin, ray)
+	local distance = (origin - ray.Position).Magnitude
+	local p = Instance.new("Part")
+	p.Parent = game.Workspace
+	p.Name = "Ray part"
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Size = Vector3.new(0.1, 0.1, distance)
+	p.CFrame = CFrame.new(origin, ray.Position)*CFrame.new(0, 0, -distance/2)
+	p.Material = Enum.Material.ForceField
+	p.BrickColor = BrickColor.new("Lime green")
+	p.CastShadow = false
+	game:GetService("Debris"):addItem(p, debugLifetime)
+end
+
+local function VisualizeBox (origin, size)
+	local p = Instance.new("Part")
+	p.Parent = game.Workspace
+	p.Name = "BoxPart"
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Size = size
+	p.CFrame = origin
+	p.Material = Enum.Material.ForceField
+	p.BrickColor = BrickColor.new("Bright blue")
+	p.CastShadow = false
+	game:GetService("Debris"):addItem(p, debugLifetime)
+end
+
+local function findNearestHum(range)
+	local currEnemy = nil
+	for _,enemy in game.Workspace.NPCs:GetChildren() do
+		if (enemy.PrimaryPart.Position - char.HumanoidRootPart.Position).Magnitude <= range then
+			if currEnemy then
+				if (enemy.PrimaryPart.Position - char.HumanoidRootPart.Position).Magnitude < (currEnemy.PrimaryPart.Position - char.HumanoidRootPart.Position).Magnitude then
+					currEnemy = enemy
+				end
+			else
+				currEnemy = enemy
+			end
+		end
+	end
+	return currEnemy
+end
+
+UIS.InputBegan:Connect(function(input, gameprocessed)
+	if gameprocessed then return end
+	if input.KeyCode == space and (running or canParkourWithoutRun) then
+		local HRPP = char.HumanoidRootPart.Position
+		local HP = char.Head.Position
+		local dir = plr.Character.HumanoidRootPart.CFrame.LookVector
+		
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = char:GetChildren()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		
+		
+		local legRay = workspace:Raycast(HRPP + Vector3.new(0,-.8,0), dir*rayLength, params)
+		local headRay = workspace:Raycast(HP + Vector3.new(0,2.5,0), dir*rayLength, params)
+		local neckRay = workspace:Raycast(HP + Vector3.new(0,-.8, 0), dir*rayLength, params)
+		
+		if debugToolsOn then
+			if legRay then VisualizeRay(HRPP + Vector3.new(0,-.8,0), legRay) end
+			if headRay then VisualizeRay(HP + Vector3.new(0,2.5,0), headRay) end
+			if neckRay then VisualizeRay(HP + Vector3.new(0,-.8, 0), neckRay) end
+		end
+		
+------------------------------------------------------------------------------------------------Vaulting------------------------------------------------------------------------------------------------
+		if legRay and not headRay and not jumping and not dashing and (running or canParkourWithoutRun) and not climbing then
+			if debugToolsOn then print("Valid Vault") end
+			vaultSound:Play()
+			vaultTrack:Play()
+			changeSpeedEvent:FireServer(vaultSpeedBoost)
+			delay(.3, function()
+				changeSpeedEvent:FireServer(-vaultSpeedBoost)
+			end)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------Ledge Grab----------------------------------------------------------------------------------------------
+		elseif legRay and not headRay and jumping then
+			if debugToolsOn then print("Valid Grab") end
+			grabSound:Play()
+			for _,child in plr.Character:GetChildren() do
+				if child:IsA("BodyVelocity") then
+					print("destroyed")
+					child:Destroy()
+				end
+			end
+			createBVEvent:FireServer(char.HumanoidRootPart, char.HumanoidRootPart.CFrame.UpVector * ledgeGrabBoost, Vector3.one * math.huge, .05)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+			
+------------------------------------------------------------------------------------------------Climbing------------------------------------------------------------------------------------------------
+		elseif (running or canParkourWithoutRun) and jumping and not climbing and not climbDeb then
+			climbDeb = true
+			delay(climbCD, function()
+				climbDeb = false
+			end)
+			local params = OverlapParams.new()
+			params.FilterDescendantsInstances = char:GetChildren()
+			params.FilterType = Enum.RaycastFilterType.Exclude
+			if debugToolsOn then VisualizeBox(char.HumanoidRootPart.CFrame * climbHitboxOffset, climbHitboxSize) end
+			for _,part in workspace:GetPartBoundsInBox(char.HumanoidRootPart.CFrame * climbHitboxOffset, climbHitboxSize, params) do
+				if part.Name == "ClimbPart" then
+					if debugToolsOn then print("Valid Climb") end
+					if autoDetectClimbPartSize then
+						pivotModelEvent:FireServer(char, part.CFrame * CFrame.new(0, -(part.Size.Y/2.5), 1))
+					else
+						pivotModelEvent:FireServer(char, part.CFrame * climbHangOffset)
+					end	
+					climbing = true
+					createWeldCEvent:FireServer(char.HumanoidRootPart, char.HumanoidRootPart, part, "ClimbWeld")
+					--local weld = Instance.new("WeldConstraint"); weld.Parent = char.HumanoidRootPart; weld.Part0 = char.HumanoidRootPart; weld.Part1 = part; weld.Name = "ClimbWeld"
+					if UIS:IsKeyDown("A") and not UIS:IsKeyDown("D") then
+						currClimbAnim = climbTrackL
+					elseif UIS:IsKeyDown("D") and not UIS:IsKeyDown("A") then
+						currClimbAnim = climbTrackR
+					else
+						currClimbAnim = climbIdleTrack
+					end
+					currClimbAnim:Play()
+					break
+				end
+			end
+		elseif climbing then
+			local vel = 0
+			if UIS:IsKeyDown(Enum.KeyCode.A) and not UIS:IsKeyDown(Enum.KeyCode.D) then
+				vel = (-char.HumanoidRootPart.CFrame.RightVector + char.HumanoidRootPart.CFrame.UpVector) * climbJumpBoost
+			elseif UIS:IsKeyDown(Enum.KeyCode.D) and not UIS:IsKeyDown(Enum.KeyCode.A) then
+				vel = (char.HumanoidRootPart.CFrame.RightVector + char.HumanoidRootPart.CFrame.UpVector) * climbJumpBoost
+			else
+				vel = char.HumanoidRootPart.CFrame.UpVector * (climbJumpBoost * 1.33)
+			end
+			createBVEvent:FireServer(char.HumanoidRootPart, vel, Vector3.one * math.huge, .05)
+			
+			climbing = false
+			createWeldCEvent:FireServer(char.HumanoidRootPart, char.HumanoidRootPart, char.HumanoidRootPart, "ClimbWeld", true, char.HumanoidRootPart:WaitForChild("ClimbWeld"))
+			currClimbAnim:Stop()
+		end
+	elseif input.KeyCode == Enum.KeyCode.A and climbing then
+		if currClimbAnim.IsPlaying then
+			currClimbAnim:Stop()
+			currClimbAnim = climbTrackL
+			currClimbAnim:Play()
+		end
+	elseif input.KeyCode == Enum.KeyCode.D and climbing then
+		if currClimbAnim.IsPlaying then
+			currClimbAnim:Stop()
+			currClimbAnim = climbTrackR
+			currClimbAnim:Play()
+		end
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+		
+------------------------------------------------------------------------------------------------Running-------------------------------------------------------------------------------------------------
+	elseif input.KeyCode == runKey and not runDeb and not climbing then
+		runDeb = true
+		if running then
+			running = false
+			changeSpeedEvent:FireServer(-runSpeedBoost)
+		else
+			changeSpeedEvent:FireServer(runSpeedBoost)
+			running = true
+		end
+		delay(runCD, function()
+			runDeb = false
+		end)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------Dashing-------------------------------------------------------------------------------------------------
+	elseif input.KeyCode == dashKey and (running or canParkourWithoutRun) and not dashDeb and not climbing then
+		dashDeb = true
+		dashing = true
+		--local playAnim = char.Humanoid:LoadAnimation(slideAnim)
+		--playAnim:Play()
+
+		local dash = Instance.new("BodyVelocity")
+		dash.MaxForce = Vector3.new(1,0,1) * 30000
+		dash.Velocity = char.HumanoidRootPart.CFrame.lookVector * 150
+		dash.Parent = char.HumanoidRootPart
+
+		
+		task.wait(0.04)
+		--playAnim:Stop()
+		dash:Destroy()
+		dashing = false
+		delay(2, function()
+			dashDeb = false
+		end)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	end
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.A and not UIS:IsKeyDown(Enum.KeyCode.D) and climbing then
+		if currClimbAnim.IsPlaying then
+			currClimbAnim:Stop()
+			currClimbAnim = climbIdleTrack
+			currClimbAnim:Play()
+		end
+	elseif input.KeyCode == Enum.KeyCode.D and not UIS:IsKeyDown(Enum.KeyCode.A) and climbing then
+		if currClimbAnim.IsPlaying then
+			currClimbAnim:Stop()
+			currClimbAnim = climbIdleTrack
+			currClimbAnim:Play()
+		end
+	end
+	
+end)
+
+RunService.RenderStepped:Connect(function(deltaTime)
+	if not running or canBladeWithRun and useHiddenBlade then
+		task.wait(.5+ deltaTime)
+		local nearestHum = findNearestHum(6)
+		
+		if nearestHum ~= nil then
+			
+			local HRPP = char.HumanoidRootPart.Position
+			local dir = -(HRPP - nearestHum.HumanoidRootPart.Position).Unit
+			local length = (HRPP - nearestHum.HumanoidRootPart.Position).Magnitude
+
+			local params = RaycastParams.new()
+			params.FilterDescendantsInstances = char:GetChildren()
+			params.FilterType = Enum.RaycastFilterType.Exclude
+
+			local backsideRay = workspace:Raycast(HRPP, dir * length, params)
+
+			if backsideRay then
+				if debugToolsOn then VisualizeRay(HRPP, backsideRay) end
+				if backsideRay.Normal == GetNormalFromFace(backsideRay.Instance, Enum.NormalId.Back) then
+					-- Face is the back
+					if HBprompt.Parent ~= nearestHum then
+						HBprompt.Parent = nearestHum
+					end
+				else
+					-- Face is not the Back
+					if HBprompt.Parent ~= script then
+						HBprompt.Parent = RS
+					end
+				end
+			end
+		else
+			HBprompt.Parent = RS
+		end
+	end
+end)
+
+function NormalToFace(normalVector, part)
+
+	local TOLERANCE_VALUE = 1 - 0.001
+	local allFaceNormalIds = {
+		Enum.NormalId.Front,
+		Enum.NormalId.Back,
+		Enum.NormalId.Bottom,
+		Enum.NormalId.Top,
+		Enum.NormalId.Left,
+		Enum.NormalId.Right
+	}    
+
+	for _, normalId in pairs( allFaceNormalIds ) do
+		if GetNormalFromFace(part, normalId):Dot(normalVector) > TOLERANCE_VALUE then
+			return normalId
+		end
+	end
+
+	return nil
+
+end
+
+function GetNormalFromFace(part, normalId)
+	return part.CFrame:VectorToWorldSpace(Vector3.FromNormalId(normalId))
+end
+
+HBprompt.Triggered:Connect(function()
+	if not hbDeb and (not running or canBladeWithRun) and useHiddenBlade then
+		hbDeb = true
+		hiddenBladeTrack:Play()
+		pivotModelEvent:FireServer(char, HBprompt.Parent.PrimaryPart.CFrame * CFrame.new(0,1.5,2))
+		delay(.35, function()
+			hiddenBladeEvent:FireServer(HBprompt.Parent)
+			bladeSound:Play()
+		end)
+		delay(hbCD, function()
+			hbDeb = false
+		end)
+	end
+	
+end)
+
