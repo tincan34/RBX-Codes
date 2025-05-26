@@ -23,7 +23,7 @@ local shootingTrack = nil
 local inspectTrack = nil
 
 local RS = game:GetService("ReplicatedStorage")
-local gunInfo = require(RS:WaitForChild("GunInfo"))
+local gunInfo = require(RS:WaitForChild("GunInfo")) -- Module script that contains stats for all different guns
 
 local events = script:WaitForChild("Events")
 local fireEvent = events:WaitForChild("Fire")
@@ -84,7 +84,7 @@ local function VisualizeRay(origin, ray) -- Debug tool to show rays
 	p.Material = Enum.Material.ForceField
 	p.BrickColor = BrickColor.new("Lime green")
 	p.CastShadow = false
-	game:GetService("Debris"):addItem(p, debugLifetime + .1)
+	game:GetService("Debris"):AddItem(p, debugLifetime + .1)
 end
 
 
@@ -95,22 +95,25 @@ tool.Equipped:Connect(function() -- Swap icon, handle animations and logic when 
 	ammoGui.Parent = plr.PlayerGui
 
 	if not reloadTrack then  -- Set Tracks
-		reloadTrack = tool.Parent.Humanoid.Animator:LoadAnimation(reloadAnim) inspectTrack = tool.Parent.Humanoid.Animator:LoadAnimation(inspectAnim)
-		recoilTrack = tool.Parent.Humanoid.Animator:LoadAnimation(recoilAnim) shootingTrack = tool.Parent.Humanoid.Animator:LoadAnimation(shootingAnim) 
+		local animator = tool.Parent.Humanoid.Animator
+		reloadTrack = animator:LoadAnimation(reloadAnim) 
+		inspectTrack = animator:LoadAnimation(inspectAnim)
+		recoilTrack = animator:LoadAnimation(recoilAnim) 
+		shootingTrack = animator:LoadAnimation(shootingAnim) 
 	end
 end)
 
-tool.Unequipped:Connect(function() -- Stop animations, switch back icon, and handle logic when unequipping
-	mouse.Icon = defaultMouse
+tool.Unequipped:Connect(function()
+	mouse.Icon = defaultMouse -- Set mouse icon back to normal when unequipped
 	equipped = false
 	holding = false
 	ammoGui.Parent = tool
-	if reloadTask then task.cancel(reloadTask) reloadTask = nil reloadTrack:Stop() reloading = false tool.Mag.Transparency = 0 canRestock = true end
+	if reloadTask then task.cancel(reloadTask) reloadTask = nil reloadTrack:Stop() reloading = false tool.Mag.Transparency = 0 canRestock = true end -- If reloading when unequipped, stop all animations and tasks
 	shootingTrack:Stop()
 	inspectTrack:Stop()
 end)
 
-tool.Deactivated:Connect(function() -- Stop holding when deactivated
+tool.Deactivated:Connect(function()
 	holding = false
 end)
 
@@ -130,20 +133,20 @@ tool.Activated:Connect(function() -- Handles firing
 		shootingTrack:Play()
 		shooting = true
 		gunshotSound:Play()
-		local params = RaycastParams.new() -- Exclude player from ray
+		local params = RaycastParams.new() -- Create params and add the character to it to exclude it from the ray's results
 		params.FilterDescendantsInstances = plr.Character:GetChildren()
 		params.FilterType = Enum.RaycastFilterType.Exclude
 		local dir = nil
 		local function rayResult(x, y) -- Fire a ray to find target
 			local random = Random.new()
-			local randomOffset = Vector3.new(random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy)) -- Give an offset to the hit position to simulate accuracy
+			local randomOffset = Vector3.new(random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy)) -- Give an offset to the rays position to simulate accuracy
 
 			dir = (mouse.Hit.Position - tool.Main.Position).Unit + randomOffset
 			return workspace:Raycast(tool.Main.Position, dir * range, params)
 		end
 		local ray = rayResult(mouse.X, mouse.Y)
 		if debugToolsOn and ray then VisualizeRay(tool.Main.Position, ray) end -- Make a visual simulating the ray for debug purposes if debug tools are on
-		local target = nil local pos = nil if ray then target = ray.Instance pos = ray.Position if target.Parent:FindFirstChild("Humanoid") then hit:Play() end end
+		local target = nil local pos = nil if ray then target = ray.Instance pos = ray.Position if target.Parent:FindFirstChild("Humanoid") then hit:Play() end end -- if the ray hits something, set the target and world position, and play a sound if it hit a humanoid
 		recoilTrack:Play()
 		fireEvent:FireServer(tool, dmg, dir, tool.Main, target, pos, range, .12) -- Fires an event to the server which damages the target and creates a bullet
 		task.wait(fireRate)
@@ -157,35 +160,35 @@ function Reload()
 	local HRP = char.HumanoidRootPart
 	local params = OverlapParams.new() params.FilterType = Enum.RaycastFilterType.Exclude params:AddToFilter(char:GetChildren())
 
-	for _,part in workspace:GetPartBoundsInBox(HRP.CFrame, Vector3.new(restockRange,restockRange,restockRange), params) do -- If restock station nearby, restock ammo instead of reload
+	for _,part in workspace:GetPartBoundsInBox(HRP.CFrame, Vector3.new(restockRange,restockRange,restockRange), params) do -- Spatial query to find restock stations in set range
 		if part.Name == "AmmoStation" then
 			if part:GetAttribute("AvailableAmmo") > 0 and canRestock then
-				if shootTask then task.cancel(shootTask) shootingTrack:Stop() end
+				if shootTask then task.cancel(shootTask) shootingTrack:Stop() end -- Stop the shooting animations
 				inspecting = false
 				inspectTrack:Stop()
 				canRestock = false
 				restockSound:Play()
-				reloadEvent:FireServer(tool, magSize, true, mags, part)
+				reloadEvent:FireServer(tool, magSize, true, mags, part) -- Fires an event to the server which updates the gun's ammo
 				reloadTask = nil
 				reloading = false
 				task.wait(1) canRestock = true
-				return
+				return -- return here to not initiate the regular reload
 			end
 		end
 	end
 
-	if tool:GetAttribute("Mags") > 0 and tool:GetAttribute("Ammo") < magSize then -- Reload ammo, drop a prop mag to the floor
+	if tool:GetAttribute("Mags") > 0 and tool:GetAttribute("Ammo") < magSize then -- If the gun has extra mags and the current mag has been used, reload
 		if shootTask then task.cancel(shootTask) shootingTrack:Stop() end
 		inspecting = false
 		inspectTrack:Stop()
 		reloadTrack:Play()
 		reloadSound:Play()
 		reloading = true
-		local propMag = tool.Mag:Clone()
+		local propMag = tool.Mag:Clone() -- Create a prop mag by cloning the mag of the gun
 		propMag.Anchored = false
 		propMag.Parent = workspace
 		propMag.CanCollide = true
-		game:GetService("Debris"):addItem(propMag, 3)
+		game:GetService("Debris"):AddItem(propMag, 3) -- Add the prop to the debris service to efficiently get rid of it after 3 seconds
 		tool.Mag.Transparency = 1
 		task.wait(reloadSpeed)
 		tool.Mag.Transparency = 0
@@ -197,15 +200,15 @@ function Reload()
 	end
 end
 
-UIS.InputBegan:Connect(function(input, gameProcessed) -- Handle input detection
+UIS.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed or not equipped then return end
-	if input.KeyCode == reloadKey and not reloading then
+	if input.KeyCode == reloadKey and not reloading then -- if the keybind for reloading is pressed and the player isn't currently reloading already, start the reload task
 		reloadTask = task.spawn(Reload)
-	elseif input.KeyCode == inspectKey and not reloading and not shooting and not inspecting then
+	elseif input.KeyCode == inspectKey and not reloading and not shooting and not inspecting then -- Play inspection animation if not shooting/reloading and pressed the keybind for inspection
 		inspecting = true
 		shootingTrack:Stop()
 		inspectTrack:Play()
-		delay(inspectTrack.Length + 0.1, function() inspecting = false end)	
+		task.delay(inspectTrack.Length + 0.1, function() inspecting = false end) -- Wait for animation to finish then set inspecting to false
 	end
 end)
 
