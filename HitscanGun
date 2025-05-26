@@ -20,6 +20,7 @@ local shootTask = nil
 local reloadTrack = nil
 local recoilTrack = nil
 local shootingTrack = nil
+local inspectTrack = nil
 
 local RS = game:GetService("ReplicatedStorage")
 local gunInfo = require(RS:WaitForChild("GunInfo"))
@@ -38,10 +39,9 @@ local animations = script:WaitForChild("Animations")
 local shootingAnim = animations:WaitForChild("Shooting")
 local reloadAnim = animations:WaitForChild("Reload")
 local recoilAnim = animations:WaitForChild("Recoil")
+local inspectAnim = animations:WaitForChild("Inspect")
 
-local reloadKey = Enum.KeyCode.R
-local mouseIcon = "http://www.roblox.com/asset/?id=9947945465"
-
+local inspecting = false
 local inShootingAnim = false
 local shooting = false
 local equipped = false
@@ -59,6 +59,10 @@ local mags = gunInfo.GunInfo[tool.Name].Mags
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ---------------------------------------------------------------------------------------Customizable-------------------------------------------------------------------------------------------------------------------
+local reloadKey = Enum.KeyCode.R
+local inspectKey = Enum.KeyCode.Y
+local mouseIcon = "http://www.roblox.com/asset/?id=9947945465"
+
 local shootingAnimLength = 2
 local restockRange = 7
 local debugToolsOn = false
@@ -90,8 +94,8 @@ tool.Equipped:Connect(function() -- Swap icon, handle animations and logic when 
 	equipped = true
 	ammoGui.Parent = plr.PlayerGui
 
-	if not reloadTrack then 
-		reloadTrack = tool.Parent.Humanoid.Animator:LoadAnimation(reloadAnim)
+	if not reloadTrack then  -- Set Tracks
+		reloadTrack = tool.Parent.Humanoid.Animator:LoadAnimation(reloadAnim) inspectTrack = tool.Parent.Humanoid.Animator:LoadAnimation(inspectAnim)
 		recoilTrack = tool.Parent.Humanoid.Animator:LoadAnimation(recoilAnim) shootingTrack = tool.Parent.Humanoid.Animator:LoadAnimation(shootingAnim) 
 	end
 end)
@@ -103,7 +107,7 @@ tool.Unequipped:Connect(function() -- Stop animations, switch back icon, and han
 	ammoGui.Parent = tool
 	if reloadTask then task.cancel(reloadTask) reloadTask = nil reloadTrack:Stop() reloading = false tool.Mag.Transparency = 0 canRestock = true end
 	shootingTrack:Stop()
-	shootingTrack:Stop()
+	inspectTrack:Stop()
 end)
 
 tool.Deactivated:Connect(function() -- Stop holding when deactivated
@@ -121,6 +125,8 @@ tool.Activated:Connect(function() -- Handles firing
 		if reloading then holding = false continue end --  if reloading dont allow firing
 		if tool:GetAttribute("Ammo") <= 0 then holding = false continue end -- if out of ammo dont allow firing
 		if shootTask then task.cancel(shootTask) end
+		inspecting = false
+		inspectTrack:Stop()
 		shootingTrack:Play()
 		shooting = true
 		gunshotSound:Play()
@@ -130,13 +136,13 @@ tool.Activated:Connect(function() -- Handles firing
 		local dir = nil
 		local function rayResult(x, y) -- Fire a ray to find target
 			local random = Random.new()
-			local randomOffset = Vector3.new(random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy))
+			local randomOffset = Vector3.new(random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy), random:NextNumber(-(1/accuracy), 1/accuracy)) -- Give an offset to the hit position to simulate accuracy
 
-			dir = (mouse.Hit.Position - tool.Main.Position).Unit + randomOffset-- :ViewportPointToRay() is another choice
+			dir = (mouse.Hit.Position - tool.Main.Position).Unit + randomOffset
 			return workspace:Raycast(tool.Main.Position, dir * range, params)
 		end
 		local ray = rayResult(mouse.X, mouse.Y)
-		if debugToolsOn and ray then VisualizeRay(tool.Main.Position, ray) end
+		if debugToolsOn and ray then VisualizeRay(tool.Main.Position, ray) end -- Make a visual simulating the ray for debug purposes if debug tools are on
 		local target = nil local pos = nil if ray then target = ray.Instance pos = ray.Position if target.Parent:FindFirstChild("Humanoid") then hit:Play() end end
 		recoilTrack:Play()
 		fireEvent:FireServer(tool, dmg, dir, tool.Main, target, pos, range, .12) -- Fires an event to the server which damages the target and creates a bullet
@@ -155,6 +161,8 @@ function Reload()
 		if part.Name == "AmmoStation" then
 			if part:GetAttribute("AvailableAmmo") > 0 and canRestock then
 				if shootTask then task.cancel(shootTask) shootingTrack:Stop() end
+				inspecting = false
+				inspectTrack:Stop()
 				canRestock = false
 				restockSound:Play()
 				reloadEvent:FireServer(tool, magSize, true, mags, part)
@@ -168,6 +176,8 @@ function Reload()
 
 	if tool:GetAttribute("Mags") > 0 and tool:GetAttribute("Ammo") < magSize then -- Reload ammo, drop a prop mag to the floor
 		if shootTask then task.cancel(shootTask) shootingTrack:Stop() end
+		inspecting = false
+		inspectTrack:Stop()
 		reloadTrack:Play()
 		reloadSound:Play()
 		reloading = true
@@ -187,123 +197,16 @@ function Reload()
 	end
 end
 
-UIS.InputBegan:Connect(function(input, gameProcessed) -- Handle reload input detection
+UIS.InputBegan:Connect(function(input, gameProcessed) -- Handle input detection
 	if gameProcessed or not equipped then return end
 	if input.KeyCode == reloadKey and not reloading then
 		reloadTask = task.spawn(Reload)
+	elseif input.KeyCode == inspectKey and not reloading and not shooting and not inspecting then
+		inspecting = true
+		shootingTrack:Stop()
+		inspectTrack:Play()
+		delay(inspectTrack.Length + 0.1, function() inspecting = false end)	
 	end
 end)
+
 ---------------------------------------------------------------------------------------------End------------------------------------------------------------------------------------------------------------------
-
---[[ 
-Hitscan Gun Script ServerSide
-Made by GoatTatum on RBX / Tincan43 on Discord
-Put Weapon Stats in Module Script
-]]
-
----------------------------------------------------------------------------------------Constants--------------------------------------------------------------------------------------------------------------------
-local events = script.Parent:WaitForChild("Events")
-
-local fireEvent = events:WaitForChild("Fire")
-local reloadEvent = events:WaitForChild("Reload")
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-local function CreateBullet(origin, worldSpace, bulletLifetime) -- Creates a "bullet" visual similar to the ray visualization
-	local distance = (origin - worldSpace).Magnitude
-	local p = Instance.new("Part")
-	p.Parent = game.Workspace
-	p.Name = "Ray part"
-	p.Anchored = true
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.Size = Vector3.new(0.1, 0.1, distance)
-	p.CFrame = CFrame.new(origin, worldSpace)*CFrame.new(0, 0, -distance/2)
-	p.Material = Enum.Material.Neon
-	p.BrickColor = BrickColor.new("New Yeller")
-	p.CastShadow = false
-	game:GetService("Debris"):addItem(p, bulletLifetime)
-end
-
-fireEvent.OnServerEvent:Connect(function(plr, tool, dmg, dir, origin, target, worldSpace, gunRange, lifeTime) -- Checks the target and damages if it contains a humanoid and calls CreateBullet
-	if not worldSpace then worldSpace = (origin.Position + gunRange * dir) end
-	tool:SetAttribute("Ammo", tool:GetAttribute("Ammo") - 1)
-	CreateBullet(origin.Position, worldSpace, lifeTime)
-	if target then
-		if target:FindFirstAncestorOfClass("Model") then
-			local enemy = target:FindFirstAncestorOfClass("Model")
-			if enemy:FindFirstChild("Humanoid") then
-				if target.Name == "Head" then dmg = dmg*1.5 end
-				target.Parent:WaitForChild("Humanoid"):TakeDamage(dmg)
-			end
-		end
-	end
-end)
-
-reloadEvent.OnServerEvent:Connect(function(plr, tool, magSize, restocking, maxMags, station) -- Updates gun ammo and mags attributes, removes available ammo from the ammo station if restocking
-	if restocking then
-		tool:SetAttribute("Ammo", magSize)
-		tool:SetAttribute("Mags", maxMags)
-		station:SetAttribute("AvailableAmmo", station:GetAttribute("AvailableAmmo") - 1)
-		local gui = station:FindFirstChild("LabelGui")
-		gui.Enabled = true
-		gui.Number.Text = station:GetAttribute("AvailableAmmo")
-		task.wait(2) gui.Enabled = false
-		return
-	end
-	tool:SetAttribute("Ammo", magSize)
-	tool:SetAttribute("Mags", tool:GetAttribute("Mags") - 1)
-end)
----------------------------------------------------------------------------------------------End------------------------------------------------------------------------------------------------------------------
-
---[[ 
-Hitscan Gun Script Module Script
-Made by GoatTatum on RBX / Tincan43 on Discord
-Put gun stats here
-]]
-
-local module = {}
-
-module.GunInfo = {
-	["M4"] = {
-		Damage = 30,
-		Firerate = 900,
-		Range = 200,
-		MagSize = 32,
-		Mags = 3,
-		Accuracy = 90,
-		ReloadSpeed = 3
-	};
-	
-	["Glock"] = {
-		Damage = 30,
-		Firerate = 600,
-		Range = 125,
-		MagSize = 16,
-		Mags = 4,
-		Accuracy = 80,
-		ReloadSpeed = 2
-	};
-	
-	["Deagle"] = {
-		Damage = 80,
-		Firerate = 120,
-		Range = 300,
-		MagSize = 7,
-		Mags = 2,
-		Accuracy = 300,
-		ReloadSpeed = 2
-	};
-	
-	["Uzi"] = {
-		Damage = 16,
-		Firerate = 1000,
-		Range = 90,
-		MagSize = 26,
-		Mags = 1,
-		Accuracy = 70,
-		ReloadSpeed = 1.5
-	}
-}
-
-return module
