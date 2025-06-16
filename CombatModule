@@ -6,6 +6,7 @@ Holds methods for sword combat
 local Combat = {}
 Combat.__index = Combat
 
+-- All static variables
 local RS = game:GetService("ReplicatedStorage")
 local TS = game:GetService("TweenService")
 local combatFolder = RS:WaitForChild("Combat")
@@ -27,6 +28,7 @@ local parrySound = sounds.Parry
 local hitSound = sounds.Hit
 
 local DAMAGED_TIME = .7
+local PARRY_STUN_TIME = .5
 local PARRY_COOLDOWN = .7
 local PARRY_WINDOW = .26
 local COMBO_RESET_LENGTH = 2
@@ -34,11 +36,6 @@ local ATTACK_COOLDOWN = .4
 local DEBUG_LIFETIME = .5
 local SWING_TIME = .3
 local RANGE = 6
-
-local damagedTask = nil
-
-local BlockTrack = nil
-local ParryTrack = nil
 
 local hitboxSize = Vector3.new(6,6,RANGE)
 local hitboxOffset = CFrame.new(0,0,-(RANGE/2))
@@ -83,24 +80,28 @@ function Combat.new(user, damage)
 		["Feinting"] = false
 	}
 	
-	-- Load tracks premptively, instead of having to load them every time
-	BlockTrack = self.Character.Humanoid.Animator:LoadAnimation(anims.Blocking)
-	ParryTrack = self.Character.Humanoid.Animator:LoadAnimation(anims.Parry)
+	self.DamagedTask = nil -- Damage task to allow a "stun" when getting damaged
+	
+	-- Load animation tracks to the player's character premptively, instead of having to load them every time
+	self.BlockTrack = self.Character.Humanoid.Animator:LoadAnimation(anims.Blocking)
+	self.ParryTrack = self.Character.Humanoid.Animator:LoadAnimation(anims.Parry)
+	self.ParriedTrack = self.Character.Humanoid.Animator:LoadAnimation(anims.Parried)
+	self.AttackTrack = self.Character.Humanoid.Animator:LoadAnimation(anims:WaitForChild("Swing"))
 	
 	return self
 end
 
 function Combat:Equip()
-	self.Equipped = true
+	self.Equipped = true -- Allow tool use when equipped
 end
 
 function Combat:Unequip()
-	self.Equipped = false
+	self.Equipped = false -- Disallow tool use when unequipped
 end
 
 function Combat:M1()
 	if self.Locked or not self.Equipped or self.Status.Action or self.Status.Stunned then return end
-	self.Status.Action = true
+	self.Status.Action = true -- Set action to true to not allow any other actions
 	
 	-- Combo logic for future use, not fully implemented
 	if time() - self.Status.LastCombo > COMBO_RESET_LENGTH then
@@ -116,29 +117,28 @@ function Combat:M1()
 	
 	self.Status.Combo = self.Status.Combo + 1
 	
-	ParryTrack:Stop()
+	self.ParryTrack:Stop()
 	
 	local hum = self.Character.Humanoid
-	local attackTrack = hum.Animator:LoadAnimation(anims:WaitForChild("Swing"))
-	attackTrack:Play()
+	self.AttackTrack:Play() -- Play the swing animation
 	
 	task.wait(SWING_TIME) -- Wait to start hit detection, matches with animation and gives opponent time to react with parry
 	
 	-- If feinting, do not go through with the hit detection and stop animation mid way
 	if self.Status.Feinting then
-		attackTrack:Stop()
-		task.wait(.2)
+		self.AttackTrack:Stop()
+		task.wait(.2) -- Wait some time before allowing another attack/action
 		self.Status.Action = false
 		self.Status.Feinting = false
-		return
+		return -- Return to break out of the function and stop attacking, as a feint should
 	end
 	
 	-- Exclude own player from hit detection with OverlapParams
 	local params = OverlapParams.new()
-	params.FilterDescendantsInstances = self.Character:GetChildren()
-	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = self.Character:GetChildren() -- Add all character parts to the overlap parameters
+	params.FilterType = Enum.RaycastFilterType.Exclude -- Set to exclude, making any query using these params skip over character parts
 	
-	local hitbox = workspace:GetPartBoundsInBox(self.Character.HumanoidRootPart.CFrame * hitboxOffset, hitboxSize, params) -- Spatial query to detect parts in range
+	local hitbox = workspace:GetPartBoundsInBox(self.Character.HumanoidRootPart.CFrame * hitboxOffset, hitboxSize, params) -- Spatial query to detect parts in the set hitbox range
 	if debugToolsOn then VisualizeBox(self.Character.HumanoidRootPart.CFrame * hitboxOffset, hitboxSize, BrickColor.new("Really red")) end
 	
 	local alreadyHit = {} -- Create a table of what opponents have already been hit to only allow one hit per swing
@@ -147,31 +147,31 @@ function Combat:M1()
 		
 		-- Guard clause to figure out if detected part is a damageable opponent
 		if not part:FindFirstAncestorOfClass("Model") or not part.Parent:FindFirstChild("Humanoid") or table.find(alreadyHit, part:FindFirstAncestorOfClass("Model")) then continue end
-		if not part:FindFirstAncestorOfClass("Model"):GetAttribute("Damageable") then continue end
+		if not part:FindFirstAncestorOfClass("Model"):GetAttribute("Damageable") then continue end -- Make sure the hitpart is part of a model that is damageable
 		
 		-- Parry if enemy's parry window is open, block if enemy is blocking
 		if part:FindFirstAncestorOfClass("Model"):GetAttribute("Parrying") == true then
 			
-			self:Parried(hum, attackTrack)
-			table.insert(alreadyHit, part:FindFirstAncestorOfClass("Model"))
-			continue
+			self:Parried(hum, self.AttackTrack) -- If enemy parry window is open, get parried
+			table.insert(alreadyHit, part:FindFirstAncestorOfClass("Model")) -- Insert the enemy to the table to not allow double or more hits
+			continue -- Move on to the next part as this one has already been found and parried
 			
-		elseif part:FindFirstAncestorOfClass("Model"):GetAttribute("Blocking") == true then
+		elseif part:FindFirstAncestorOfClass("Model"):GetAttribute("Blocking") == true then -- If the player is blocking but NOT parrying initiate a block
 			local target = part:FindFirstAncestorOfClass("Model")
-			changeAttEvent:FireServer(target, "Posture", target:GetAttribute("Posture") + 30)
-			table.insert(alreadyHit, target)
-			continue
+			changeAttEvent:FireServer(target, "Posture", target:GetAttribute("Posture") + 30) -- Add posture to the player on the server as a penalty for getting parried
+			table.insert(alreadyHit, target) -- Insert the enemy to the table to not allow double or more hits
+			continue -- Move on to the next part as this one has already been found and has blocked
 		end
 		
 		-- If the player has not been stunned and the opponent is not blocking/parrying, Go through with damaging the opponent
 		local target = part:FindFirstAncestorOfClass("Model")
 		if not self.Status.Stunned then 
-			damageTargetEvent:FireServer(target.Humanoid, self.Damage) 
-			ReplicateVFX(target.HumanoidRootPart, hitVFX, 1, 1)
-			ReplicateSound(hitSound, target.HumanoidRootPart, 1)
+			damageTargetEvent:FireServer(target.Humanoid, self.Damage) -- Send the damage to the server
+			ReplicateVFX(target.HumanoidRootPart, hitVFX, 1, 1)  -- Send VFX to all clients to reduce server load
+			ReplicateSound(hitSound, target.HumanoidRootPart, 1) -- Send sound to all clients to reduce server load
 		end
 		table.insert(alreadyHit, target) -- Make sure to put the hit enemy in the already hit table to avoid hitting the same enemy twice
-		continue
+		continue -- Move on to the next part as this one has already been found and has been damaged
 	end
 	
 	-- Allow actions again after cooldown
@@ -181,84 +181,84 @@ end
 
 -- Start Block and parry if possible
 function Combat:StartBlock()
-	if self.Locked or not self.Equipped or self.Status.Action or self.Status.Blocking then return end
+	if self.Locked or not self.Equipped or self.Status.Action or self.Status.Blocking then return end -- Guard clause, if not doing any other actions/states, continue with the block
 	self.Status.Blocking = true
 	self.Status.Action = true
 	
-	if not self.Status.Parrying then
+	if not self.Status.Parrying then -- If we can Parry then, do this first before blocking
 		self.Status.Parrying = true
 		changeAttEvent:FireServer(self.Character, "Parrying", true) -- Changes player's character to parrying during the parry window
-		ParryTrack:Play()
-		task.wait(PARRY_WINDOW)
-		changeAttEvent:FireServer(self.Character, "Parrying", false)
-		task.delay(PARRY_COOLDOWN, function() self.Status.Parrying = false end) -- Allow parrying again
+		self.ParryTrack:Play() -- Play the parry animation
+		task.wait(PARRY_WINDOW) -- Wait for how long the set parry window is
+		changeAttEvent:FireServer(self.Character, "Parrying", false) -- Change player's parrying status to false after parry window closes
+		task.delay(PARRY_COOLDOWN, function() self.Status.Parrying = false end) -- Allow character to parry againa after the cooldown time, use delay as to not stop the rest of the logic (blocking)
 	end
 	
 	-- If after the parry/parry not available and block is still held, change character blocking status to true
 	if not self.Status.Blocking then return end
 	changeAttEvent:FireServer(self.Character, "Blocking", true)
-	BlockTrack:Play()
+	self.BlockTrack:Play() -- Play the block animation
 end
 
 -- Stop blocking when block key is let go of
 function Combat:EndBlock()
-	self.Status.Action = false
+	self.Status.Action = false -- Turn action and blocking to false to allow further actions
 	self.Status.Blocking = false
-	changeAttEvent:FireServer(self.Character, "Blocking", false)
-	BlockTrack:Stop()
+	changeAttEvent:FireServer(self.Character, "Blocking", false) -- Stop character blocking status
+	self.BlockTrack:Stop() -- Stop the block animation
 end
 
 -- When damaged, stun the player
 function Combat:Damaged()
-	if damagedTask then task.cancel(damagedTask) end
-	print("Damaged!")
+	if damagedTask then task.cancel(damagedTask) end -- If already in the damage "stun", cancel it to restart the damage "stun" timer
 	local function DamagedLogic()
-		self.Status.Stunned = true
-		task.wait(DAMAGED_TIME)
-		self.Status.Stunned = false
+		self.Status.Stunned = true -- Set stun status to true to not allow action or damaging enemies during this time
+		task.wait(DAMAGED_TIME) -- Wait the set damage stun time
+		self.Status.Stunned = false -- End the stun and allow action again
 	end
 	
 	damagedTask = task.spawn(DamagedLogic) -- Spawns the task so that if the player is damaged again while this is still going, the damaged task will be cancelled and the damaged time will reset
 end
 
 function Combat:StartFeint()
-	self.Status.Feinting = true
+	self.Status.Feinting = true -- Set feinting to true, which will stop attacks mid way
 end
 
 function Combat:EndFeint()
-	self.Status.Feinting = false
+	self.Status.Feinting = false -- Set feinting to false, go back to normal attack logic
 end
 
 function Combat:Lock()
 	self.Locked = true
 end
 
+-- Destroy function for optimization
 function Combat:Destroy()
-	setmetatable(self, nil)
-	table.clear(self)
-	table.freeze(self)
+	setmetatable(self, nil) -- clear the metatable ref
+	table.clear(self) -- clear self
+	table.freeze(self) -- freeze self
 end
 
 -- Logic for when player hits a parrying target
 function Combat:Parried(hum, attackTrack)
 	
-	attackTrack:Stop()
-	local parriedTrack = hum.Animator:LoadAnimation(anims:FindFirstChild("Parried"))
-	parriedTrack:Play()
+	attackTrack:Stop() -- Stop the swinging animation
+	self.ParriedTrack:Play() -- Play the parry animation
 	
-	if damagedTask then task.cancel(damagedTask) end
-	
+	if damagedTask then task.cancel(damagedTask) end -- End the "stun" gained from getting hit to replace it with a new parry stun
 	self.Status.Stunned = false
 	
 	-- Give posture penalty, create VFX and sound effects and replicate to all clients
-	changeAttEvent:FireServer(self.Character, "Posture", self.Character:GetAttribute("Posture") + 20)
-	local target = self.Character:FindFirstChildOfClass("Tool").Handle
-	ReplicateVFX(target, parryVFX, 1, 1)
-	ReplicateSound(parrySound, self.Character.HumanoidRootPart, 1)
+	changeAttEvent:FireServer(self.Character, "Posture", self.Character:GetAttribute("Posture") + 20) -- Add posture to the player on the server as a penalty for getting parried
+	local target = self.Character:FindFirstChildOfClass("Tool").Handle -- Set the spawn point of the vfx to the players tool handle
+	
+	ReplicateVFX(target, parryVFX, 1, 1) -- Send VFX to all clients to reduce server load
+	ReplicateSound(parrySound, self.Character.HumanoidRootPart, 1) -- Send sound to all clients to reduce server load
 
 	-- Do not allow any combat for .5 after getting parried
-	self.Locked = true
-	task.delay(0.5, function() self.Locked = false end)
+	self.Locked = true -- Set self.Locked to true to not allow any actions shortly after getting parried
+	task.wait(PARRY_STUN_TIME) -- Wait a set "stun" time
+	self.Locked = false -- Set back to false to allow actions again
 end
 
 function ReplicateVFX(target, part, emit, life)
@@ -268,7 +268,7 @@ function ReplicateVFX(target, part, emit, life)
 		["EmitAmount"] = emit,
 		["Lifetime"] = life
 	}
-	replicateEvent:FireServer(replicateArgs)
+	replicateEvent:FireServer(replicateArgs) -- Send this to the server which fires all the clients to create the VFX to reduce server load
 end
 
 function ReplicateSound(sound, target, life)
@@ -279,7 +279,7 @@ function ReplicateSound(sound, target, life)
 		["Lifetime"] = life
 	}
 
-	replicateSoundEvent:FireServer(replicateArgs)
+	replicateSoundEvent:FireServer(replicateArgs) -- Send this to the server which fires all the clients to create the sound to reduce server load
 end
 
 return table.freeze(Combat)
